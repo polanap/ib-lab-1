@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Исключения для SpotBugs. Здесь только информационные правила и ограничения,
+  навязанные API фреймворка. Настоящие находки исправляются в коде, а не подавляются.
+-->
+<FindBugsFilter>
+    <!-- Find Security Bugs помечает каждый REST-контроллер как «точку входа».
+         Это не дефект, а подсказка для ручного ревью: все эндпоинты закрыты
+         правилом anyRequest().authenticated() в SecurityConfig, кроме /auth/**. -->
+    <Match>
+        <Bug pattern="SPRING_ENDPOINT"/>
+    </Match>
+
+    <!-- Чтение заголовка Authorization — прямое назначение JWT-фильтра.
+         Значение не используется как есть: подпись токена проверяется в JwtTokenProvider. -->
+    <Match>
+        <Class name="org.example.iblab1.security.JwtAuthenticationFilter"/>
+        <Bug pattern="SERVLET_HEADER"/>
+    </Match>
+
+    <!-- Сигнатуры SecurityFilterChain и AuthenticationManager заданы Spring Security:
+         http.build() и getAuthenticationManager() объявляют throws Exception. -->
+    <Match>
+        <Class name="org.example.iblab1.config.SecurityConfig"/>
+        <Bug pattern="THROWS_METHOD_THROWS_CLAUSE_BASIC_EXCEPTION"/>
+    </Match>
+
+    <!-- Сгенерированный Lombok код (@Builder) не анализируем: предупреждения
+         относятся к сгенерированным методам, а не к написанному коду. -->
+    <Match>
+        <Class name="~.*\$.*Builder"/>
+    </Match>
+</FindBugsFilter>

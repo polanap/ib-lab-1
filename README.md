@@ -91,6 +91,11 @@
 - Секреты (`JWT_SECRET`, пароль БД) читаются из окружения, `.env` в `.gitignore`.
 - `GlobalExceptionHandler` не отдаёт наружу стек-трейсы и внутренние сообщения.
 
+**Подделка логов (A09).** Данные, пришедшие от пользователя, попадают в лог только через
+`LogSanitizer`: символы CR и LF заменяются, поэтому одно сообщение всегда остаётся одной
+строкой и в журнал нельзя дописать фальшивую запись. Применяется в `GlobalExceptionHandler`
+и `JwtAuthenticationFilter` — находка `CRLF_INJECTION_LOGS` от Find Security Bugs.
+
 ## Запуск
 
 ```bash
@@ -112,14 +117,69 @@ docker compose up -d      # PostgreSQL
 логин, отказ в доступе без токена и с подделанным токеном, экранирование XSS-payload
 и обработку SQLi-payload.
 
-## CI/CD
+## CI/CD с security-сканерами
 
-`.github/workflows/ci.yml` — на каждый push и pull request:
+`.github/workflows/ci.yml` — проверки запускаются автоматически при каждом `push`
+в `master`/`main` и при создании pull request (плюс ручной запуск через `workflow_dispatch`).
 
-| Job                | Что проверяет                                      |
-|--------------------|----------------------------------------------------|
-| `build`            | Сборка Gradle и весь набор тестов                  |
-| `codeql`           | SAST: CodeQL, набор запросов `security-extended`   |
-| `semgrep`          | SAST: правила `p/java`, `p/owasp-top-ten`, `p/secrets` |
-| `dependency-check` | SCA: OWASP Dependency-Check, падение при CVSS ≥ 7  |
-| `secrets`          | Gitleaks: секреты в коде и в истории git           |
+| Job                | Тип      | Инструмент                                    | Поведение при находках                |
+|--------------------|----------|-----------------------------------------------|---------------------------------------|
+| `build`            | тесты    | Gradle + JUnit                                 | падает при падении теста              |
+| `spotbugs`         | **SAST** | SpotBugs 4.10 + Find Security Bugs 1.14        | падает при любой находке              |
+| `dependency-check` | **SCA**  | OWASP Dependency-Check 12.2                    | падает при CVSS ≥ 7 (High/Critical)   |
+| `codeql`           | SAST     | CodeQL, набор `security-extended`              | результаты во вкладке Security        |
+| `secrets`          | secrets  | Gitleaks                                       | падает при найденном секрете          |
+
+Отчёты всех сканеров выгружаются как артефакты сборки (`actions/upload-artifact`),
+SARIF-отчёт SpotBugs дополнительно публикуется в GitHub Code Scanning.
+
+### SAST — SpotBugs + Find Security Bugs
+
+Подключён как gradle-плагин, поэтому запускается одинаково локально и в CI:
+
+```bash
+./gradlew spotbugsMain spotbugsTest     # отчёты: build/reports/spotbugs/
+```
+
+Настройки в `build.gradle.kts`: максимальная глубина анализа (`Effort.MAX`),
+минимальный порог уверенности (`Confidence.LOW`), отчёты HTML + SARIF, `ignoreFailures = false`.
+
+- `config/spotbugs/exclude.xml` — исключения. Только информационные правила
+  (`SPRING_ENDPOINT`, `SERVLET_HEADER`) и ограничения API Spring
+  (`THROWS_METHOD_THROWS_CLAUSE_BASIC_EXCEPTION`), каждое с обоснованием.
+  Настоящие находки исправляются в коде, а не подавляются.
+- `config/spotbugs/find-sec-bugs-taint.txt` — собственные санитайзеры проекта
+  (`HtmlSanitizer`, `LogSanitizer`) объявлены для taint-анализа как `SAFE`,
+  иначе анализатор не видит, что данные очищены.
+
+Первый прогон нашёл 13 замечаний, по ним внесены правки:
+
+| Находка                                  | Что сделано                                                       |
+|------------------------------------------|-------------------------------------------------------------------|
+| `CRLF_INJECTION_LOGS` (×2)               | добавлен `LogSanitizer` — защита от подделки записей в логе (A09) |
+| `NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE` (×2) | приведение principal заменено на проверку `instanceof`       |
+| `SE_BAD_FIELD`, `SE_NO_SERIALVERSIONID`  | сущности реализуют `Serializable`, добавлен `serialVersionUID`     |
+| `SIC_INNER_SHOULD_BE_STATIC_ANON`        | анонимный класс в тестах заменён на именованный статический        |
+
+Текущее состояние: **0 находок** в `main` и в `test`.
+
+### SCA — OWASP Dependency-Check
+
+Тоже gradle-плагин:
+
+```bash
+./gradlew dependencyCheckAnalyze        # отчёты: build/reports/dependency-check-report.html и .json
+```
+
+Настройки: `failBuildOnCVSS = 7.0` (сборка падает на High/Critical), сканируется
+только `runtimeClasspath`, разобранные ложные срабатывания — в
+`config/dependency-check/suppressions.xml` (пока пуст).
+
+Первый запуск скачивает базу NVD целиком и без API-ключа занимает десятки минут.
+Ключ выдаётся бесплатно на <https://nvd.nist.gov/developers/request-an-api-key>;
+в CI он передаётся через секрет репозитория `NVD_API_KEY`, а база кэшируется
+через `actions/cache` (`~/.gradle/dependency-check-data`). Локально:
+
+```bash
+NVD_API_KEY=<ключ> ./gradlew dependencyCheckAnalyze
+```

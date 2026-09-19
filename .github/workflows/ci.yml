@@ -12,29 +12,106 @@ permissions:
 
 jobs:
   build:
-    name: Build and test
+    name: Сборка и тесты
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Установка JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
+      - name: Настройка Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build and run tests
-        run: ./gradlew build --no-daemon
+      - name: Компиляция и запуск тестов
+        run: ./gradlew test --no-daemon
 
-      - name: Upload test report
+      - name: Отчёт о тестах
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-report
           path: build/reports/tests/test
+
+  spotbugs:
+    name: SAST (SpotBugs + Find Security Bugs)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Настройка Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Сборка падает при любой находке: правила-исключения перечислены
+      # в config/spotbugs/exclude.xml с обоснованием.
+      - name: Статический анализ байт-кода
+        run: ./gradlew spotbugsMain spotbugsTest --no-daemon
+
+      - name: Отчёт SpotBugs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-report
+          path: build/reports/spotbugs
+
+      # Находки попадают во вкладку Security репозитория.
+      - name: Загрузка SARIF в GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: build/reports/spotbugs/main.sarif
+          category: spotbugs
+
+  dependency-check:
+    name: SCA (OWASP Dependency-Check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Настройка Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Локальная копия базы NVD переиспользуется между запусками:
+      # без кэша каждый прогон заново скачивает несколько сотен мегабайт.
+      - name: Кэш базы данных NVD
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/dependency-check-data
+          key: dependency-check-${{ runner.os }}-${{ hashFiles('build.gradle.kts') }}
+          restore-keys: dependency-check-${{ runner.os }}-
+
+      # Сборка падает при уязвимости с CVSS >= 7 (High/Critical).
+      # NVD_API_KEY не обязателен, но без него обновление базы сильно замедляется:
+      # ключ бесплатно выдаётся на https://nvd.nist.gov/developers/request-an-api-key
+      - name: Проверка зависимостей на известные CVE
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: ./gradlew dependencyCheckAnalyze --no-daemon
+
+      - name: Отчёт Dependency-Check
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: build/reports/dependency-check-report.*
 
   codeql:
     name: SAST (CodeQL)
@@ -45,76 +122,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Установка JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Initialize CodeQL
+      - name: Инициализация CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: java-kotlin
           queries: security-extended
 
-      - name: Build for analysis
+      - name: Сборка для анализа
         run: ./gradlew classes --no-daemon
 
-      - name: Perform CodeQL analysis
+      - name: Анализ CodeQL
         uses: github/codeql-action/analyze@v3
 
-  semgrep:
-    name: SAST (Semgrep OWASP Top 10)
-    runs-on: ubuntu-latest
-    container:
-      image: semgrep/semgrep
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Semgrep
-        run: semgrep scan --config p/java --config p/owasp-top-ten --config p/secrets --error --metrics=off
-
-  dependency-check:
-    name: SCA (OWASP Dependency-Check)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Resolve dependencies
-        run: ./gradlew dependencies --configuration runtimeClasspath --no-daemon
-
-      - name: Scan dependencies for known CVEs
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: ib-lab-1
-          path: '.'
-          format: 'HTML'
-          args: >
-            --failOnCVSS 7
-            --enableExperimental
-
-      - name: Upload dependency-check report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-check-report
-          path: reports
-
   secrets:
-    name: Secret scanning (Gitleaks)
+    name: Поиск секретов (Gitleaks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
+      - name: Запуск Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
