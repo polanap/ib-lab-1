@@ -47,7 +47,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } catch (Exception ex) {
             // Некорректный, просроченный или поддельный токен не должен аутентифицировать запрос.
             SecurityContextHolder.clearContext();
-            logger.debug("Rejected JWT: " + ex.getMessage());
+            logger.debug(LogSanitizer.sanitize("Отклонён JWT: " + ex.getMessage()));
         }
 
         filterChain.doFilter(request, response);

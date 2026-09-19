@@ -16,19 +16,21 @@ public class TestTransactionConfig {
 
     @Bean
     public PlatformTransactionManager transactionManager() {
-        return new PlatformTransactionManager() {
-            @Override
-            public TransactionStatus getTransaction(TransactionDefinition definition) {
-                return new SimpleTransactionStatus();
-            }
+        return new NoOpTransactionManager();
+    }
 
-            @Override
-            public void commit(TransactionStatus status) {
-            }
+    private static final class NoOpTransactionManager implements PlatformTransactionManager {
+        @Override
+        public TransactionStatus getTransaction(TransactionDefinition definition) {
+            return new SimpleTransactionStatus();
+        }
 
-            @Override
-            public void rollback(TransactionStatus status) {
-            }
-        };
+        @Override
+        public void commit(TransactionStatus status) {
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+        }
     }
 }

@@ -1,6 +1,7 @@
 package org.example.iblab1.exceptions;
 
 import org.example.iblab1.model.dto.response.ErrorMessageResponse;
+import org.example.iblab1.security.LogSanitizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
@@ -78,7 +79,7 @@ public class GlobalExceptionHandler {
     }
 
     private ErrorMessageResponse createAndLogError(String message, Throwable e) {
-        log.warn(message, e);
+        log.warn(LogSanitizer.sanitize(message), e);
         return new ErrorMessageResponse(message);
     }
 }

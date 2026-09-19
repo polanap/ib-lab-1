@@ -31,7 +31,10 @@ public class JwtTokenProvider {
     }
 
     public String generateToken(Authentication authentication) {
-        UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+        if (!(authentication.getPrincipal() instanceof UserDetails userDetails)) {
+            throw new IllegalStateException("Principal is not UserDetails");
+        }
+
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + jwtExpirationMs);
 

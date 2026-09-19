@@ -31,7 +31,9 @@ public class AuthService {
 
         String jwt = tokenProvider.generateToken(authentication);
 
-        CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
+        if (!(authentication.getPrincipal() instanceof CustomUserDetails userDetails)) {
+            throw new IllegalStateException("Principal is not CustomUserDetails");
+        }
         User user = userDetails.getUser();
 
         return AuthResponse.builder()
