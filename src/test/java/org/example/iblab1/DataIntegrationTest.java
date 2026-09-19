@@ -163,6 +163,23 @@ class DataIntegrationTest {
     }
 
     /**
+     * Input consisting only of markup becomes empty after sanitizing, which the
+     * database rejects — the request must be refused with 400 instead of failing.
+     */
+    @Test
+    void createDataRejectsMarkupOnlyPayload() throws Exception {
+        mockMvc.perform(post("/api/data")
+                        .header("Authorization", authenticate())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new PostRequest(
+                                "<script>alert('xss')</script>",
+                                "<b>content</b>"))))
+                .andExpect(status().isBadRequest());
+
+        verify(postRepository, never()).save(any());
+    }
+
+    /**
      * Markup is stripped when a post is stored, so no script tag can be persisted.
      */
     @Test

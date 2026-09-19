@@ -30,9 +30,19 @@ public class PostService {
         User author = userRepository.findByLogin(login)
                 .orElseThrow(() -> new UnauthorizedException("Authenticated user no longer exists"));
 
+        String title = htmlSanitizer.sanitize(postRequest.getTitle());
+        String content = htmlSanitizer.sanitize(postRequest.getContent());
+
+        if (title.isBlank()) {
+            throw new IllegalArgumentException("Title must not consist only of markup");
+        }
+        if (content.isBlank()) {
+            throw new IllegalArgumentException("Content must not consist only of markup");
+        }
+
         Post post = new Post();
-        post.setTitle(htmlSanitizer.sanitize(postRequest.getTitle()));
-        post.setContent(htmlSanitizer.sanitize(postRequest.getContent()));
+        post.setTitle(title);
+        post.setContent(content);
         post.setAuthor(author);
 
         return postRepository.save(post);
