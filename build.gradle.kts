@@ -12,6 +12,10 @@ group = "org.example"
 version = "0.0.1-SNAPSHOT"
 description = "ib-lab-1"
 
+// Spring Boot 4.1.1 тянет Tomcat 11.0.24 с критическими CVE (CVE-2026-65905, CVE-2026-65637
+// и др.), поэтому управляемая версия поднята до ближайшей исправленной.
+ext["tomcat.version"] = "11.0.26"
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(17)
@@ -37,7 +41,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-liquibase")
     implementation("io.jsonwebtoken:jjwt-api:0.12.3")
-    implementation("com.googlecode.owasp-java-html-sanitizer:owasp-java-html-sanitizer:20240325.1")
+    // В 20240325.1 — CVE-2025-66021, исправлено в более свежем выпуске.
+    implementation("com.googlecode.owasp-java-html-sanitizer:owasp-java-html-sanitizer:20260313.1")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.3")
     runtimeOnly("io.jsonwebtoken:jjwt-gson:0.12.3")
     runtimeOnly("org.postgresql:postgresql")
@@ -76,6 +81,26 @@ tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
     }
 }
 
+/**
+ * Ключ NVD для Dependency-Check. Берётся, в порядке приоритета, из переменной окружения
+ * NVD_API_KEY (так он приходит из секрета репозитория в CI), из -PnvdApiKey или из
+ * строки NVD_API_KEY в файле .env, который лежит в .gitignore и не попадает в репозиторий.
+ */
+fun nvdApiKey(): String? {
+    System.getenv("NVD_API_KEY")?.takeIf { it.isNotBlank() }?.let { return it }
+    (findProperty("nvdApiKey") as String?)?.takeIf { it.isNotBlank() }?.let { return it }
+
+    val envFile = file(".env")
+    if (!envFile.exists()) {
+        return null
+    }
+    return envFile.readLines()
+        .firstOrNull { it.trimStart().startsWith("NVD_API_KEY=") }
+        ?.substringAfter('=')
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+}
+
 // SCA: проверка зависимостей на известные CVE.
 dependencyCheck {
     formats = listOf("HTML", "JSON")
@@ -83,9 +108,10 @@ dependencyCheck {
     failBuildOnCVSS = 7.0f
     // Ключ NVD не обязателен, но без него обновление базы сильно ограничено по скорости.
     // Пустое значение передавать нельзя — сканер считает его некорректным ключом.
-    System.getenv("NVD_API_KEY")?.takeIf { it.isNotBlank() }?.let { nvd.apiKey = it }
+    nvdApiKey()?.let { nvd.apiKey = it }
     suppressionFile = "config/dependency-check/suppressions.xml"
     scanConfigurations = listOf("runtimeClasspath")
+    skipTestGroups = false
     // Анализатор .NET-сборок проекту не нужен.
     analyzers.assemblyEnabled = false
 }

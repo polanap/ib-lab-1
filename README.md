@@ -113,9 +113,44 @@ docker compose up -d      # PostgreSQL
 ./gradlew test
 ```
 
-17 интеграционных тестов покрывают регистрацию (в т.ч. хранение только хэша),
-логин, отказ в доступе без токена и с подделанным токеном, экранирование XSS-payload
-и обработку SQLi-payload.
+18 интеграционных тестов покрывают регистрацию (в т.ч. хранение только хэша),
+логин, отказ в доступе без токена и с подделанным токеном, экранирование XSS-payload,
+отказ при вводе из одной разметки и обработку SQLi-payload.
+
+## Ручная проверка API (Postman / curl)
+
+`postman/ib-lab-1.postman_collection.json` — коллекция из 17 запросов с тестами,
+`postman/local.postman_environment.json` — окружение с `baseUrl`.
+Импорт: Postman → Import → оба файла, затем Run collection (запросы идут по порядку:
+регистрация генерирует уникальный логин, логин сохраняет JWT в переменную коллекции).
+
+Из консоли тем же файлом:
+
+```bash
+npx newman run postman/ib-lab-1.postman_collection.json \
+  -e postman/local.postman_environment.json
+```
+
+| Папка                         | Что проверяется                                                              |
+|-------------------------------|------------------------------------------------------------------------------|
+| 1. Регистрация                | 201; занятый логин, несовпадение паролей и нарушение правил валидации → 400   |
+| 2. Аутентификация             | выдача JWT; неверный пароль и несуществующий логин → одинаковый 401; SQLi → 401 |
+| 3. Доступ без валидного токена| GET и POST без заголовка, мусорный токен, подделанная подпись → 401            |
+| 4. Доступ с валидным токеном  | создание и чтение постов, автор из токена, XSS-payload не возвращается, ввод из одной разметки → 400, size ≤ 100 |
+
+То же самое через curl:
+
+```bash
+curl -i -X POST localhost:8080/auth/registration -H 'Content-Type: application/json' \
+  -d '{"login":"alice","password":"SuperSecret123","passwordConfirmation":"SuperSecret123"}'
+
+TOKEN=$(curl -s -X POST localhost:8080/auth/login -H 'Content-Type: application/json' \
+  -d '{"login":"alice","password":"SuperSecret123"}' | jq -r .token)
+
+curl -i localhost:8080/api/data                                   # 401 — без токена
+curl -i localhost:8080/api/data -H "Authorization: Bearer ${TOKEN}x"  # 401 — подпись не сходится
+curl -i localhost:8080/api/data -H "Authorization: Bearer $TOKEN"     # 200
+```
 
 ## CI/CD с security-сканерами
 
@@ -175,11 +210,35 @@ SARIF-отчёт SpotBugs дополнительно публикуется в G
 только `runtimeClasspath`, разобранные ложные срабатывания — в
 `config/dependency-check/suppressions.xml` (пока пуст).
 
+Отдельно выставлен `skipTestGroups = false`. По умолчанию сканер считает тестовой любую
+конфигурацию, у которой имя (или имя любого предка) матчится регуляркой `test`, а плагин
+Spring Boot делает `runtimeClasspath` наследником `testAndDevelopmentOnly` — из-за этого
+production-classpath молча выпадал из скана и отчёт приходил пустой
+(`Dependencies Scanned: 0`) при зелёной сборке. Область и так ограничена
+`scanConfigurations`, поэтому эвристика отключена. Сейчас сканируется 102 зависимости.
+
+Первый результативный прогон нашёл 25 уязвимостей в двух транзитивных компонентах,
+обе закрыты подъёмом версий:
+
+| Компонент                   | Было         | Стало        | Чем грозило                               |
+|-----------------------------|--------------|--------------|-------------------------------------------|
+| `tomcat-embed-*`            | 11.0.24      | 11.0.26      | 24 CVE, максимум CVSS 9.8                 |
+| `owasp-java-html-sanitizer` | 20240325.1   | 20260313.1   | CVE-2025-66021                            |
+
+Версия Tomcat задаётся через `ext["tomcat.version"]` — её подставляет BOM Spring Boot,
+прямой зависимости в `dependencies` нет. Текущее состояние: **0 уязвимостей**.
+
 Первый запуск скачивает базу NVD целиком и без API-ключа занимает десятки минут.
-Ключ выдаётся бесплатно на <https://nvd.nist.gov/developers/request-an-api-key>;
-в CI он передаётся через секрет репозитория `NVD_API_KEY`, а база кэшируется
-через `actions/cache` (`~/.gradle/dependency-check-data`). Локально:
+Ключ выдаётся бесплатно на <https://nvd.nist.gov/developers/request-an-api-key>.
+В CI он приходит из секрета репозитория `NVD_API_KEY`, а база кэшируется
+через `actions/cache` (`~/.gradle/dependency-check-data`).
+
+Локально ключ берётся из первого доступного источника (`build.gradle.kts`, функция `nvdApiKey()`):
 
 ```bash
-NVD_API_KEY=<ключ> ./gradlew dependencyCheckAnalyze
+echo 'NVD_API_KEY=<ключ>' >> .env        # файл в .gitignore, ничего экспортировать не нужно
+./gradlew dependencyCheckAnalyze
+
+NVD_API_KEY=<ключ> ./gradlew dependencyCheckAnalyze   # или разово через окружение
+./gradlew dependencyCheckAnalyze -PnvdApiKey=<ключ>   # или gradle-свойством
 ```
